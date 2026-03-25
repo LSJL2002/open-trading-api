@@ -43,11 +43,17 @@ class MarketData:
         Returns:
             Current price as integer (KRW), or None if request failed
         """
+        # For mock trading, return a dummy price since the API may not be available
+        if self.api_client.mock_trading:
+            logger.info("Mock trading: Using dummy price 70000 KRW")
+            self.last_price = 70000
+            self.last_price_time = datetime.now()
+            return 70000
+        
         endpoint = "/uapi/domestic-stock/v1/quotations/inquire-price"
         
-        # TR_ID for mock trading vs real trading
-        # For mock trading with V prefix (V = Virtual)
-        tr_id = "FHKST01010100"  # This works for both real and mock
+        # TR_ID for real trading
+        tr_id = "FHKST01010100"
         
         params = {
             "FID_COND_MRKT_DIV_CODE": config.MARKET_DIV_CODE,  # J = KRX

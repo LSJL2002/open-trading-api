@@ -4,12 +4,19 @@
 
 ### 1️⃣ Set Your Credentials (1 minute)
 
-Open a terminal and set these environment variables:
+Open a terminal and set these environment variables (or map GitHub Secrets in CI):
 
 ```bash
+# Local run
 export GH_APPKEY="your_api_key_here"
 export GH_APPSECRET="your_api_secret_here"
 export GH_ACCOUNT="12345678-01"
+
+# GitHub Actions example (in workflow YAML):
+#   env:
+#     GH_APPKEY: ${{ secrets.GH_APPKEY }}
+#     GH_APPSECRET: ${{ secrets.GH_APPSECRET }}
+#     GH_ACCOUNT: ${{ secrets.GH_ACCOUNT }}
 ```
 
 Where:

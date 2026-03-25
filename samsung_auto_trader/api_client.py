@@ -55,10 +55,9 @@ class APIClient:
             Headers dictionary
         """
         headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",            "Accept": "text/plain",            "Authorization": f"Bearer {self.token}",
             "charset": "UTF-8",
-            "tr-id": tr_id,
+            "tr_id": tr_id,
             "custtype": "P",  # Personal customer
             "tr-cont": "",    # No continuation
         }

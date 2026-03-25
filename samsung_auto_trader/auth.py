@@ -40,21 +40,45 @@ class TokenManager:
         """
         Load credentials from environment variables.
         
-        Expected environment variables:
-        - GH_APPKEY: Korea Investment app key
-        - GH_APPSECRET: Korea Investment app secret
+        Supports the following environment variable names:
+        - GH_APPKEY / GH_APPSECRET
+        - GITHUB_APPKEY / GITHUB_APPSECRET
+        - KIS_APPKEY / KIS_APPSECRET
+        - APPKEY / APPSECRET (legacy)
         
         Returns:
             True if credentials loaded successfully, False otherwise
         """
-        self.appkey = os.getenv("GH_APPKEY")
-        self.appsecret = os.getenv("GH_APPSECRET")
-        
+        appkey_sources = [
+            ("GH_APPKEY", os.getenv("GH_APPKEY")),
+            ("GITHUB_APPKEY", os.getenv("GITHUB_APPKEY")),
+            ("KIS_APPKEY", os.getenv("KIS_APPKEY")),
+            ("APPKEY", os.getenv("APPKEY")),
+        ]
+        appsecret_sources = [
+            ("GH_APPSECRET", os.getenv("GH_APPSECRET")),
+            ("GITHUB_APPSECRET", os.getenv("GITHUB_APPSECRET")),
+            ("KIS_APPSECRET", os.getenv("KIS_APPSECRET")),
+            ("APPSECRET", os.getenv("APPSECRET")),
+        ]
+
+        for name, value in appkey_sources:
+            if value:
+                self.appkey = value
+                logger.info(f"Using app key from env var: {name}")
+                break
+
+        for name, value in appsecret_sources:
+            if value:
+                self.appsecret = value
+                logger.info(f"Using app secret from env var: {name}")
+                break
+
         if not self.appkey or not self.appsecret:
             log_module.log_error(
                 logger,
                 "Credential Load Failed",
-                "GH_APPKEY and GH_APPSECRET environment variables are required"
+                "App key and secret are required. Set GH_APPKEY/GH_APPSECRET, GITHUB_APPKEY/GITHUB_APPSECRET, or KIS_APPKEY/KIS_APPSECRET."
             )
             return False
         

@@ -103,12 +103,25 @@ Examples:
     
     # Step 1: Load and parse account number from environment
     logger.info("\n📋 Step 1: Loading configuration...")
-    account_str = os.getenv("GH_ACCOUNT")
+    account_sources = [
+        ("GH_ACCOUNT", os.getenv("GH_ACCOUNT")),
+        ("GITHUB_ACCOUNT", os.getenv("GITHUB_ACCOUNT")),
+        ("KIS_ACCOUNT", os.getenv("KIS_ACCOUNT")),
+        ("ACCOUNT", os.getenv("ACCOUNT")),
+    ]
+
+    account_str = None
+    for name, value in account_sources:
+        if value:
+            account_str = value
+            logger.info(f"Using account from env var: {name}")
+            break
+
     if not account_str:
         log_module.log_error(
             logger,
             "Configuration",
-            "GH_ACCOUNT environment variable not set. Please set it to your account number (e.g., 12345678-01)"
+            "Account environment variable not set. Please set GH_ACCOUNT (or GITHUB_ACCOUNT/KIS_ACCOUNT/ACCOUNT) to your account number (e.g., 12345678-01)"
         )
         return 1
     
