@@ -191,8 +191,15 @@ Examples:
     
     logger.info(f"✅ Connection verified. Current price: {current_price:,} KRW")
     
-    # Step 6: Run trading loop
-    logger.info("\n🔄 Step 6: Starting trading loop...")
+    # Step 6: Check if market is open
+    logger.info("\n📊 Step 6: Checking market status...")
+    if not trader.is_trading_window_open():
+        logger.info("❌ Not opened")
+        logger.info("Market trading window (09:10 - 15:30 KST) is closed.")
+        return 0
+    
+    # Step 7: Run trading loop
+    logger.info("\n🔄 Step 7: Starting trading loop...")
     logger.info("Press Ctrl+C to stop trading at any time\n")
     
     try:
