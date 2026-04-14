@@ -47,7 +47,11 @@ class Trader:
         # Initialize sub-managers
         self.market = MarketData(api_client)
         self.account = Account(api_client, account_number, account_product_code)
-        self.orders = OrderManager(api_client, account_number, account_product_code)
+        self.orders = OrderManager(api_client, account_number, account_product_code, self.account)
+        
+        # Track trading performance
+        self.total_profit = 0  # Total profit/loss in KRW
+        self.completed_trades = 0  # Number of completed buy-sell cycles
         
         logger.info(f"🤖 Trader initialized for {stock_code}")
     
@@ -177,6 +181,15 @@ class Trader:
         else:
             logger.info("⏳ Sell order still pending or not executed")
         
+        # Calculate profit if a complete buy-sell cycle occurred
+        if buy_executed and qty_after_sell < qty_after_buy:
+            qty_traded = qty_after_buy - qty_after_sell
+            cycle_profit = (sell_price - buy_price) * qty_traded
+            self.total_profit += cycle_profit
+            self.completed_trades += 1
+            logger.info(f"💰 Cycle profit: {cycle_profit:,} KRW ({qty_traded} shares: {buy_price:,} → {sell_price:,})")
+            logger.info(f"📈 Total profit so far: {self.total_profit:,} KRW ({self.completed_trades} trades)")
+        
         # Final balance check
         final_balance = self.account.get_balance()
         if final_balance:
@@ -263,4 +276,10 @@ class Trader:
             logger.info(f"📊 Trading session ended")
             logger.info(f"⏱️  Total duration: {total_time:.1f} minutes")
             logger.info(f"🔢 Total cycles executed: {cycle_count}")
+            logger.info(f"✔️  Completed trades: {self.completed_trades}")
+            logger.info("=" * 70)
+            if self.total_profit >= 0:
+                logger.info(f"💹 TOTAL PROFIT: {self.total_profit:,} KRW 📈")
+            else:
+                logger.info(f"📉 TOTAL LOSS: {self.total_profit:,} KRW")
             logger.info("=" * 70)

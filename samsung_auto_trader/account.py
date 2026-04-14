@@ -59,6 +59,11 @@ class Account:
         self.account_product_code = account_product_code
         self.last_balance: Optional[AccountBalance] = None
         self.last_holdings: Optional[List[StockHolding]] = None
+        
+        # For mock trading: track simulated holdings and balance
+        self.mock_holdings_quantity = 0
+        self.mock_holdings_purchase_price = 0
+        self.mock_available_cash = 10_000_000  # Start with 10 million KRW
     
     def get_balance(self) -> Optional[AccountBalance]:
         """
@@ -69,6 +74,23 @@ class Account:
         Returns:
             AccountBalance object or None if request failed
         """
+        # For mock trading, return tracked mock balance
+        if self.api_client.mock_trading:
+            logger.info("💰 Mock trading: Using tracked balance")
+            
+            # Calculate holdings value
+            holdings_value = self.mock_holdings_quantity * 70000  # Mock price
+            total_assets = self.mock_available_cash + holdings_value
+            
+            balance = AccountBalance(
+                total_balance=total_assets,
+                available_cash=self.mock_available_cash,
+                total_assets=total_assets
+            )
+            self.last_balance = balance
+            logger.info(f"💵 Balance: {balance.available_cash:,} KRW available, {balance.total_assets:,} KRW total (Holdings: {self.mock_holdings_quantity} shares)")
+            return balance
+        
         endpoint = "/uapi/domestic-stock/v1/trading/inquire-account-balance"
         tr_id = "CTRP6548R"  # Account balance inquiry TR ID
         
@@ -136,6 +158,37 @@ class Account:
         Returns:
             List of StockHolding objects, or None if request failed
         """
+        # For mock trading, return tracked mock holdings
+        if self.api_client.mock_trading:
+            logger.info("📦 Mock trading: Returning tracked holdings")
+            holdings = []
+            
+            if self.mock_holdings_quantity > 0:
+                holding = StockHolding(
+                    stock_code=stock_code or config.STOCK_CODE,
+                    stock_name="Samsung Electronics (Mock)",
+                    quantity=self.mock_holdings_quantity,
+                    purchase_price=self.mock_holdings_purchase_price,
+                    current_price=70000,  # Mock current price
+                    total_value=self.mock_holdings_quantity * 70000,
+                    profit_loss=(70000 - self.mock_holdings_purchase_price) * self.mock_holdings_quantity
+                )
+                holdings.append(holding)
+            
+            self.last_holdings = holdings
+            
+            if holdings:
+                for h in holdings:
+                    logger.info(
+                        f"📊 Holding: {h.stock_name} ({h.stock_code}) "
+                        f"x{h.quantity} @ {h.current_price:,} KRW "
+                        f"(Value: {h.total_value:,} KRW, P/L: {h.profit_loss:+,} KRW)"
+                    )
+            else:
+                logger.info("📊 No holdings found")
+            
+            return holdings
+        
         endpoint = "/uapi/domestic-stock/v1/trading/inquire-balance"
         tr_id = "TTTC8434R"  # Holdings inquiry TR ID for mock trading
         
@@ -231,3 +284,32 @@ class Account:
         if self.last_balance:
             return self.last_balance.available_cash
         return None
+    
+    def update_mock_holding(self, quantity_change: int, price: int) -> None:
+        """
+        Update mock holdings when an order is simulated.
+        
+        Args:
+            quantity_change: Positive for buy, negative for sell
+            price: Price at which order was executed
+        """
+        if quantity_change > 0:
+            # Buy order: add to holdings and deduct from cash
+            cash_spent = quantity_change * price
+            self.mock_available_cash -= cash_spent
+            
+            if self.mock_holdings_quantity == 0:
+                self.mock_holdings_purchase_price = price
+            else:
+                # Update average purchase price
+                total_cost = self.mock_holdings_quantity * self.mock_holdings_purchase_price
+                new_cost = quantity_change * price
+                self.mock_holdings_purchase_price = (total_cost + new_cost) // (self.mock_holdings_quantity + quantity_change)
+            self.mock_holdings_quantity += quantity_change
+        else:
+            # Sell order: reduce holdings and add to cash
+            cash_gained = abs(quantity_change) * price
+            self.mock_available_cash += cash_gained
+            self.mock_holdings_quantity += quantity_change  # quantity_change is negative
+            if self.mock_holdings_quantity < 0:
+                self.mock_holdings_quantity = 0

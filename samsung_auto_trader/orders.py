@@ -42,7 +42,8 @@ class OrderManager:
         self,
         api_client: APIClient,
         account_number: str,
-        account_product_code: str
+        account_product_code: str,
+        account=None
     ):
         """
         Initialize order manager.
@@ -51,10 +52,12 @@ class OrderManager:
             api_client: APIClient instance
             account_number: 8-digit account number
             account_product_code: 2-digit product code (01 for stocks)
+            account: Account object for updating mock holdings (optional)
         """
         self.api_client = api_client
         self.account_number = account_number
         self.account_product_code = account_product_code
+        self.account = account
         self.last_orders = []
     
     def place_order(
@@ -78,6 +81,41 @@ class OrderManager:
         Returns:
             Order object with order ID if successful, None if failed
         """
+        action_str = "SELL" if order_type == OrderType.SELL else "BUY"
+        
+        # For mock trading, return a simulated successful order
+        if self.api_client.mock_trading:
+            logger.info(
+                f"📤 Mock trading: Simulating {action_str} order: {quantity} shares of {stock_code} @ {price:,} KRW..."
+            )
+            
+            # Generate a mock order ID
+            order_id = f"MOCK{len(self.last_orders) + 1:05d}"
+            
+            order = Order(
+                order_type=order_type,
+                stock_code=stock_code,
+                quantity=quantity,
+                price=price,
+                order_id=order_id,
+                execution_status="완료"  # "Completed" in Korean
+            )
+            
+            self.last_orders.append(order)
+            
+            # Update mock holdings when an order is placed
+            if self.account:
+                qty_change = quantity if order_type == OrderType.BUY else -quantity
+                self.account.update_mock_holding(qty_change, price)
+            
+            log_module.log_trading_action(
+                logger,
+                f"{action_str} Order",
+                f"Order ID: {order.order_id}, Status: {order.execution_status} (MOCK)"
+            )
+            
+            return order
+        
         endpoint = "/uapi/domestic-stock/v1/trading/order-cash"
         
         # Determine TR_ID based on order type and environment
@@ -102,7 +140,6 @@ class OrderManager:
             "CNDT_PRIC": ""  # Not used for standard limit orders
         }
         
-        action_str = "SELL" if order_type == OrderType.SELL else "BUY"
         logger.info(
             f"📤 Placing {action_str} order: {quantity} shares of {stock_code} @ {price:,} KRW..."
         )
