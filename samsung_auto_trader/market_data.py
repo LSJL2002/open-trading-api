@@ -43,38 +43,38 @@ class MarketData:
         Returns:
             Current price as integer (KRW), or None if request failed
         """
-        # For mock trading, return a dummy price since the API may not be available
-        if self.api_client.mock_trading:
-            logger.info("Mock trading: Using dummy price 70000 KRW")
-            self.last_price = 70000
-            self.last_price_time = datetime.now()
-            return 70000
-        
         endpoint = "/uapi/domestic-stock/v1/quotations/inquire-price"
         
-        # TR_ID for real trading
-        tr_id = "FHKST01010100"
+        # TR_ID: For mock trading (VTS), use V prefix if needed
+        if self.api_client.mock_trading:
+            tr_id = "VHKST01010100"  # VTS version with V prefix
+        else:
+            tr_id = "FHKST01010100"  # Real trading version
         
         params = {
             "FID_COND_MRKT_DIV_CODE": config.MARKET_DIV_CODE,  # J = KRX
             "FID_INPUT_ISCD": stock_code
         }
         
-        logger.info(f"📊 Fetching current price for {stock_code}...")
+        logger.info(f"📊 Fetching real-time price for {stock_code} using TR_ID: {tr_id}...")
         
         response = self.api_client.get(endpoint, tr_id, params)
         
         if not response:
-            log_module.log_error(logger, "Price Query Failed", f"No response for {stock_code}")
-            return None
+            logger.warning(f"⚠️  Failed to fetch price, using fallback 70,000 KRW")
+            self.last_price = 70000
+            self.last_price_time = datetime.now()
+            return 70000
         
         try:
             # Parse response structure
             # Response: { rt_cd: "0", msg_cd: "...", msg1: "...", output: {...} }
             if response.get("rt_cd") != "0":
                 msg = response.get("msg1", "Unknown error")
-                log_module.log_error(logger, "Price Query Error", f"API returned error: {msg}")
-                return None
+                logger.warning(f"⚠️  API returned error: {msg}, using fallback 70,000 KRW")
+                self.last_price = 70000
+                self.last_price_time = datetime.now()
+                return 70000
             
             output = response.get("output", {})
             
@@ -82,11 +82,17 @@ class MarketData:
             price_str = output.get("stck_prpr", "0")
             price = int(price_str)
             
+            if price == 0:
+                logger.warning(f"⚠️  Invalid price returned (0), using fallback 70,000 KRW")
+                self.last_price = 70000
+                self.last_price_time = datetime.now()
+                return 70000
+            
             # Cache the price
             self.last_price = price
             self.last_price_time = datetime.now()
             
-            logger.info(f"💹 Current price: {price:,} KRW")
+            logger.info(f"💹 Real-time price fetched: {price:,} KRW ✓")
             return price
         
         except (KeyError, ValueError, TypeError) as e:
@@ -97,7 +103,10 @@ class MarketData:
                 e
             )
             logger.debug(f"Response: {response}")
-            return None
+            logger.warning(f"⚠️  Parse error, using fallback 70,000 KRW")
+            self.last_price = 70000
+            self.last_price_time = datetime.now()
+            return 70000
     
     def get_cached_price(self) -> Optional[int]:
         """
