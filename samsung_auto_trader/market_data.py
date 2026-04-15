@@ -45,11 +45,9 @@ class MarketData:
         """
         endpoint = "/uapi/domestic-stock/v1/quotations/inquire-price"
         
-        # TR_ID: For mock trading (VTS), use V prefix if needed
-        if self.api_client.mock_trading:
-            tr_id = "VHKST01010100"  # VTS version with V prefix
-        else:
-            tr_id = "FHKST01010100"  # Real trading version
+        # TR_ID: Use the same for both real and demo trading
+        # The API endpoint itself differentiates based on the base_url
+        tr_id = "FHKST01010100"
         
         params = {
             "FID_COND_MRKT_DIV_CODE": config.MARKET_DIV_CODE,  # J = KRX
@@ -72,6 +70,7 @@ class MarketData:
             if response.get("rt_cd") != "0":
                 msg = response.get("msg1", "Unknown error")
                 logger.warning(f"⚠️  API returned error: {msg}, using fallback 70,000 KRW")
+                logger.debug(f"Full error response: {response}")
                 self.last_price = 70000
                 self.last_price_time = datetime.now()
                 return 70000

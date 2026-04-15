@@ -156,7 +156,12 @@ Examples:
     
     # Step 3: Initialize API client
     logger.info("\n📡 Step 3: Initializing API client...")
-    api_client = APIClient(token, mock_trading=(config.TRADING_ENV == "demo"))
+    api_client = APIClient(
+        token,
+        token_manager.appkey,
+        token_manager.appsecret,
+        mock_trading=(config.TRADING_ENV == "demo")
+    )
     logger.info("✅ API client ready")
     
     # Step 4: Initialize trader

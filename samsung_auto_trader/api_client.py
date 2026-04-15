@@ -23,15 +23,19 @@ logger = log_module.setup_logger(__name__)
 class APIClient:
     """REST API client for Korea Investment Open API."""
     
-    def __init__(self, token: str, mock_trading: bool = True):
+    def __init__(self, token: str, app_key: str, app_secret: str, mock_trading: bool = True):
         """
         Initialize API client.
         
         Args:
             token: Access token for API authentication
+            app_key: App key (required by KIS API)
+            app_secret: App secret key (required by KIS API)
             mock_trading: If True use mock trading endpoint, else real trading
         """
         self.token = token
+        self.app_key = app_key
+        self.app_secret = app_secret
         self.mock_trading = mock_trading
         
         # Use VTS (Virtual Trading System) endpoint for mock trading
@@ -55,11 +59,15 @@ class APIClient:
             Headers dictionary
         """
         headers = {
-            "Content-Type": "application/json",            "Accept": "text/plain",            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+            "Accept": "text/plain",
             "charset": "UTF-8",
+            "Authorization": f"Bearer {self.token}",
+            "appkey": self.app_key,
+            "appsecret": self.app_secret,
             "tr_id": tr_id,
             "custtype": "P",  # Personal customer
-            "tr-cont": "",    # No continuation
+            "tr_cont": "",    # No continuation
         }
         return headers
     
