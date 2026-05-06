@@ -64,6 +64,9 @@ class Account:
         self.mock_holdings_quantity = 0
         self.mock_holdings_purchase_price = 0
         self.mock_available_cash = 10_000_000  # Start with 10 million KRW
+        
+        # Pending sell order: holds stock waiting for price target
+        self.pending_sell_order = None  # Will store {'quantity': int, 'target_price': int, 'buy_price': int}
     
     def get_balance(self) -> Optional[AccountBalance]:
         """
@@ -313,3 +316,69 @@ class Account:
             self.mock_holdings_quantity += quantity_change  # quantity_change is negative
             if self.mock_holdings_quantity < 0:
                 self.mock_holdings_quantity = 0
+    
+    def place_pending_sell_order(self, quantity: int, buy_price: int, target_sell_price: int) -> None:
+        """
+        Place a pending sell order that waits for price to reach target.
+        
+        This doesn't execute immediately - it holds the stock and waits until
+        the market price reaches target_sell_price.
+        
+        Args:
+            quantity: Number of shares to sell
+            buy_price: Price at which shares were bought
+            target_sell_price: Target price to sell at
+        """
+        self.pending_sell_order = {
+            'quantity': quantity,
+            'buy_price': buy_price,
+            'target_sell_price': target_sell_price
+        }
+        logger.info(
+            f"📋 Pending sell order placed: {quantity} shares "
+            f"(bought @ {buy_price:,}, target sell @ {target_sell_price:,})"
+        )
+    
+    def has_pending_sell_order(self) -> bool:
+        """Check if there's a pending sell order waiting for price."""
+        return self.pending_sell_order is not None
+    
+    def get_pending_sell_order(self) -> Optional[Dict[str, Any]]:
+        """Get the pending sell order details."""
+        return self.pending_sell_order
+    
+    def execute_pending_sell_order(self, execution_price: int) -> Optional[Dict[str, Any]]:
+        """
+        Execute the pending sell order at given price.
+        
+        Returns the order details and clears the pending order.
+        
+        Args:
+            execution_price: Price at which the sell is executed
+            
+        Returns:
+            Dictionary with order details, or None if no pending order
+        """
+        if not self.pending_sell_order:
+            return None
+        
+        order = self.pending_sell_order.copy()
+        quantity = order['quantity']
+        buy_price = order['buy_price']
+        
+        # Execute the sell (deduct from holdings, add to cash)
+        cash_gained = quantity * execution_price
+        self.mock_available_cash += cash_gained
+        self.mock_holdings_quantity = 0  # All sold
+        
+        profit = (execution_price - buy_price) * quantity
+        
+        logger.info(
+            f"💰 Pending sell order EXECUTED at {execution_price:,}: "
+            f"{quantity} shares, Profit: {profit:,} KRW"
+        )
+        
+        # Clear pending order
+        self.pending_sell_order = None
+        
+        return {**order, 'execution_price': execution_price, 'profit': profit}

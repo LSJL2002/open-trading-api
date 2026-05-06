@@ -70,6 +70,55 @@ class Trader:
         log_module.log_trading_window(logger, is_open, now.strftime("%H:%M:%S"))
         return is_open
     
+    def get_order_prices_from_momentum(self) -> Tuple[int, int, str]:
+        """
+        Calculate buy and sell order prices based on momentum analysis.
+        
+        Strategy:
+        - Buy: At recent low price + buffer (capture upswing)
+        - Sell: At recent high price - buffer (capture downswing)
+        - Only trade if clear momentum detected
+        
+        Returns:
+            Tuple of (buy_price, sell_price, momentum_signal)
+            momentum_signal: 'uptrend' | 'downtrend' | 'neutral'
+        """
+        momentum = self.market.get_price_momentum()
+        
+        buy_price = momentum['min_price'] - config.ORDER_BUFFER_KRW
+        sell_price = momentum['max_price'] + config.ORDER_BUFFER_KRW
+        momentum_signal = momentum['momentum']
+        
+        logger.info(
+            f"📍 Momentum-based orders: "
+            f"Buy {buy_price:,} (low {momentum['min_price']:,}), "
+            f"Sell {sell_price:,} (high {momentum['max_price']:,}) | "
+            f"Signal: {momentum_signal} ({momentum['price_change_percent']:+.2f}%)"
+        )
+        
+        return buy_price, sell_price, momentum_signal
+    
+    def should_place_orders(self) -> bool:
+        """
+        Determine if we should place orders based on momentum.
+        
+        Returns:
+            True if we should place orders, False if momentum is too weak
+        """
+        momentum = self.market.get_price_momentum()
+        
+        # Need enough price history to detect momentum
+        if momentum['history_length'] < 3:
+            logger.info(f"⏳ Insufficient price history ({momentum['history_length']}/{config.MOMENTUM_WINDOW}), waiting...")
+            return False
+        
+        # Only trade on clear momentum signals
+        if momentum['momentum'] == 'neutral':
+            logger.info(f"😑 No clear momentum ({momentum['price_change_percent']:+.2f}%), waiting...")
+            return False
+        
+        return True
+    
     def get_order_prices(self, current_price: int) -> Tuple[int, int]:
         """
         Calculate buy and sell order prices based on current price.
@@ -95,21 +144,18 @@ class Trader:
     
     def execute_trading_cycle(self) -> bool:
         """
-        Execute one complete trading cycle:
+        Execute one complete trading cycle with realistic sell waiting:
         1. Get current price
-        2. Check current holdings
-        3. Check account balance
-        4. Place buy order (at current price - 2000)
-        5. Wait briefly for execution
-        6. Check holdings again
-        7. If time permits, place sell order (at current price + 2000)
-        8. Verify execution
+        2. Check if we have a pending sell order waiting for price target
+        3. If pending sell exists and price >= target, execute the sell (real profit!)
+        4. If no pending sell, check momentum and place a new buy order
+        5. Place sell order (pending) at target price
         
         Returns:
             True if cycle completed successfully, False if error occurred
         """
         logger.info("=" * 70)
-        logger.info("🔄 Starting trading cycle...")
+        logger.info("🔄 Starting trading cycle (Realistic Order Matching)...")
         logger.info("=" * 70)
         
         # Step 1: Get current price
@@ -118,22 +164,67 @@ class Trader:
             log_module.log_error(logger, "Trading Cycle", "Failed to get current price")
             return False
         
-        # Step 2: Check current holdings before order
+        # Step 2: Check if we have a pending sell order waiting for execution
+        pending_sell = self.account.get_pending_sell_order()
+        if pending_sell:
+            target_sell_price = pending_sell['target_sell_price']
+            buy_price = pending_sell['buy_price']
+            quantity = pending_sell['quantity']
+            
+            logger.info("-" * 70)
+            logger.info(f"📋 Pending sell order waiting: {quantity} shares @ {target_sell_price:,}")
+            logger.info(f"   Current price: {current_price:,} KRW")
+            logger.info(f"   Target price: {target_sell_price:,} KRW (bought @ {buy_price:,})")
+            
+            # Check if current price meets or exceeds target
+            if current_price >= target_sell_price:
+                logger.info(f"✅ Price reached target! Executing pending sell at {current_price:,}")
+                
+                # Execute the pending sell
+                result = self.account.execute_pending_sell_order(current_price)
+                if result:
+                    profit = result['profit']
+                    self.total_profit += profit
+                    self.completed_trades += 1
+                    
+                    logger.info(f"💰 SOLD at {current_price:,} KRW")
+                    logger.info(f"💰 Trade profit: {profit:,} KRW")
+                    logger.info(f"📈 Total profit: {self.total_profit:,} KRW ({self.completed_trades} trades)")
+                    logger.info("=" * 70)
+                    return True
+            else:
+                # Price not yet at target, wait
+                price_diff = target_sell_price - current_price
+                percent_diff = (price_diff / current_price) * 100
+                logger.info(f"⏳ Waiting for price to rise {price_diff:,} KRW (+{percent_diff:.2f}%)")
+                logger.info("=" * 70)
+                return True
+        
+        # Step 3: No pending sell, so do a new buy-sell cycle
+        logger.info("-" * 70)
+        
+        # Check momentum and decide whether to trade
+        if not self.should_place_orders():
+            logger.info("⏭️  Skipping this cycle due to weak momentum")
+            logger.info("=" * 70)
+            return True
+        
+        # Step 4: Check current holdings before order
         holdings_before = self.account.get_holdings(self.stock_code)
         qty_before = holdings_before[0].quantity if holdings_before else 0
         logger.info(f"📦 Holdings before order: {qty_before} shares")
         
-        # Step 3: Check account balance
+        # Step 5: Check account balance
         balance = self.account.get_balance()
         if not balance:
             log_module.log_error(logger, "Trading Cycle", "Failed to get account balance")
             return False
         
-        # Calculate order prices
-        buy_price, sell_price = self.get_order_prices(current_price)
+        # Calculate momentum-based order prices
+        buy_price, sell_target_price, momentum_signal = self.get_order_prices_from_momentum()
         
-        # Step 4: Place BUY order
-        logger.info("-" * 70)
+        # Step 6: Place BUY order
+        logger.info(f"📈 Momentum: {momentum_signal} - Placing BUY at {buy_price:,} KRW")
         buy_order = self.orders.place_buy_order(
             self.stock_code,
             buy_price,
@@ -143,7 +234,7 @@ class Trader:
             log_module.log_error(logger, "Trading Cycle", "Failed to place buy order")
             return False
         
-        # Step 5: Wait for execution and re-check holdings
+        # Step 7: Wait for execution and re-check holdings
         logger.info(f"⏳ Waiting {config.MARKET_DATA_POLL_INTERVAL_SECONDS}s for buy order execution...")
         time.sleep(config.MARKET_DATA_POLL_INTERVAL_SECONDS)
         
@@ -153,50 +244,35 @@ class Trader:
         
         logger.info(f"📦 Holdings after buy: {qty_after_buy} shares")
         if buy_executed:
-            logger.info(f"✅ Buy order EXECUTED (+{qty_after_buy - qty_before} shares)")
+            logger.info(f"✅ Buy order EXECUTED at {buy_price:,} (+{qty_after_buy - qty_before} shares)")
         else:
             logger.info("⏳ Buy order still pending or not executed")
+            logger.info("=" * 70)
+            return True
         
-        # Step 6: Place SELL order (if we don't have holdings already)
+        # Step 8: Place SELL order as pending (will wait for price)
         logger.info("-" * 70)
+        logger.info(f"📉 Placing SELL order as PENDING: {sell_target_price:,} KRW")
+        logger.info(f"   Current profit target: +{sell_target_price - buy_price:,} KRW per share")
+        
         sell_order = self.orders.place_sell_order(
             self.stock_code,
-            sell_price,
+            sell_target_price,
             config.ORDER_QUANTITY
         )
         if not sell_order:
             log_module.log_error(logger, "Trading Cycle", "Failed to place sell order")
             return False
         
-        # Step 7: Wait and verify sell execution
-        logger.info(f"⏳ Waiting {config.MARKET_DATA_POLL_INTERVAL_SECONDS}s for sell order execution...")
-        time.sleep(config.MARKET_DATA_POLL_INTERVAL_SECONDS)
-        
-        holdings_after_sell = self.account.get_holdings(self.stock_code)
-        qty_after_sell = holdings_after_sell[0].quantity if holdings_after_sell else 0
-        
-        logger.info(f"📦 Holdings after sell: {qty_after_sell} shares")
-        if qty_after_sell < qty_after_buy:
-            logger.info(f"✅ Sell order EXECUTED (-{qty_after_buy - qty_after_sell} shares)")
-        else:
-            logger.info("⏳ Sell order still pending or not executed")
-        
-        # Calculate profit if a complete buy-sell cycle occurred
-        if buy_executed and qty_after_sell < qty_after_buy:
-            qty_traded = qty_after_buy - qty_after_sell
-            cycle_profit = (sell_price - buy_price) * qty_traded
-            self.total_profit += cycle_profit
-            self.completed_trades += 1
-            logger.info(f"💰 Cycle profit: {cycle_profit:,} KRW ({qty_traded} shares: {buy_price:,} → {sell_price:,})")
-            logger.info(f"📈 Total profit so far: {self.total_profit:,} KRW ({self.completed_trades} trades)")
+        logger.info(f"⏳ Stock held at {qty_after_buy} shares, waiting for price to reach {sell_target_price:,}...")
         
         # Final balance check
         final_balance = self.account.get_balance()
         if final_balance:
-            logger.info(f"💵 Final balance: {final_balance.available_cash:,} KRW available")
+            logger.info(f"💵 Balance: {final_balance.available_cash:,} KRW available")
         
         logger.info("=" * 70)
-        logger.info("✅ Trading cycle completed")
+        logger.info("✅ Buy placed, sell pending (waiting for market price)")
         logger.info("=" * 70)
         
         return True
@@ -225,8 +301,9 @@ class Trader:
         logger.info("🚀 SAMSUNG ELECTRONICS AUTO TRADER STARTED")
         logger.info(f"📅 Trading window: {config.TRADING_START_TIME} - {config.TRADING_END_TIME}")
         logger.info(f"🎯 Target: {config.STOCK_NAME} ({self.stock_code})")
-        logger.info(f"💹 Buy offset: {config.ORDER_PRICE_OFFSET_BUY} KRW")
-        logger.info(f"💹 Sell offset: {config.ORDER_PRICE_OFFSET_SELL} KRW")
+        logger.info(f"� Strategy: Momentum Detection (window: {config.MOMENTUM_WINDOW} prices)")
+        logger.info(f"📊 Momentum threshold: {config.MOMENTUM_THRESHOLD_PERCENT}%")
+        logger.info(f"💹 Order buffer: {config.ORDER_BUFFER_KRW} KRW")
         logger.info(f"⏱️  Poll interval: {config.PRICE_POLL_INTERVAL_SECONDS}s")
         logger.info("=" * 70)
         

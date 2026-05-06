@@ -72,6 +72,10 @@ class OrderManager:
         
         API: /uapi/domestic-stock/v1/trading/order-cash
         
+        In mock trading:
+        - BUY orders execute immediately (market usually has buyers)
+        - SELL orders are placed as pending (wait for market price to reach target)
+        
         Args:
             order_type: OrderType.BUY or OrderType.SELL
             stock_code: 6-digit stock code (e.g., "005930")
@@ -83,38 +87,71 @@ class OrderManager:
         """
         action_str = "SELL" if order_type == OrderType.SELL else "BUY"
         
-        # For mock trading, return a simulated successful order
+        # For mock trading, handle buy and sell differently
         if self.api_client.mock_trading:
             logger.info(
-                f"📤 Mock trading: Simulating {action_str} order: {quantity} shares of {stock_code} @ {price:,} KRW..."
+                f"📤 Mock trading: {action_str} order: {quantity} shares of {stock_code} @ {price:,} KRW..."
             )
             
             # Generate a mock order ID
             order_id = f"MOCK{len(self.last_orders) + 1:05d}"
             
-            order = Order(
-                order_type=order_type,
-                stock_code=stock_code,
-                quantity=quantity,
-                price=price,
-                order_id=order_id,
-                execution_status="완료"  # "Completed" in Korean
-            )
+            if order_type == OrderType.BUY:
+                # BUY orders execute immediately (assumption: price is close to market)
+                execution_status = "완료"  # "Completed"
+                
+                order = Order(
+                    order_type=order_type,
+                    stock_code=stock_code,
+                    quantity=quantity,
+                    price=price,
+                    order_id=order_id,
+                    execution_status=execution_status
+                )
+                
+                self.last_orders.append(order)
+                
+                # Update mock holdings
+                if self.account:
+                    self.account.update_mock_holding(quantity, price)
+                
+                log_module.log_trading_action(
+                    logger,
+                    f"{action_str} Order",
+                    f"Order ID: {order.order_id}, Status: {execution_status} (MOCK - EXECUTED)"
+                )
+                
+                return order
             
-            self.last_orders.append(order)
-            
-            # Update mock holdings when an order is placed
-            if self.account:
-                qty_change = quantity if order_type == OrderType.BUY else -quantity
-                self.account.update_mock_holding(qty_change, price)
-            
-            log_module.log_trading_action(
-                logger,
-                f"{action_str} Order",
-                f"Order ID: {order.order_id}, Status: {order.execution_status} (MOCK)"
-            )
-            
-            return order
+            else:  # SELL order
+                # SELL orders are placed as pending (not executed yet)
+                # They wait for market price to reach the target
+                execution_status = "대기"  # "Pending"
+                
+                order = Order(
+                    order_type=order_type,
+                    stock_code=stock_code,
+                    quantity=quantity,
+                    price=price,
+                    order_id=order_id,
+                    execution_status=execution_status
+                )
+                
+                self.last_orders.append(order)
+                
+                # Place as pending order (don't execute yet, don't deduct from holdings)
+                if self.account:
+                    # Get the buy price from holdings
+                    buy_price = self.account.mock_holdings_purchase_price
+                    self.account.place_pending_sell_order(quantity, buy_price, price)
+                
+                log_module.log_trading_action(
+                    logger,
+                    f"{action_str} Order",
+                    f"Order ID: {order.order_id}, Status: {execution_status} (MOCK - PENDING)"
+                )
+                
+                return order
         
         endpoint = "/uapi/domestic-stock/v1/trading/order-cash"
         

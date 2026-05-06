@@ -26,13 +26,26 @@ EXCHANGE_ID: Final[str] = "KRX"  # Korea Exchange
 # ============================================================================
 # Order Configuration
 # ============================================================================
-ORDER_PRICE_OFFSET_BUY: Final[int] = -2000   # Buy at price - 2000 KRW
-ORDER_PRICE_OFFSET_SELL: Final[int] = 2000   # Sell at price + 2000 KRW
 ORDER_QUANTITY: Final[int] = 1               # Buy/sell 1 share per order
 
 # Order division (주문구분)
 # 00: 지정가주문 (limit order)
 ORDER_DIVISION: Final[str] = "00"
+
+# ============================================================================
+# Momentum Trading Configuration
+# ============================================================================
+# Number of recent prices to track for momentum detection
+MOMENTUM_WINDOW: Final[int] = 5
+
+# Minimum percentage change to consider as trend
+# Example: 0.5 means 0.5% change triggers a signal
+MOMENTUM_THRESHOLD_PERCENT: Final[float] = 0.3
+
+# Price change to place orders relative to recent trend
+# Buy at: lowest_recent_price - this amount
+# Sell at: highest_recent_price + this amount
+ORDER_BUFFER_KRW: Final[int] = 500  # Conservative buffer for order placement
 
 # ============================================================================
 # Trading Window (Korean Market Hours)
@@ -45,7 +58,7 @@ TRADING_END_TIME: Final[time] = time(15, 30)     # 03:30 PM (15:30)
 # ============================================================================
 # Conservative polling intervals to avoid hitting rate limits
 # Mock trading has strict request limits, so we use long intervals
-PRICE_POLL_INTERVAL_SECONDS: Final[int] = 30      # Check price every 30s
+PRICE_POLL_INTERVAL_SECONDS: Final[int] = 15      # Check price every 15s
 BALANCE_POLL_INTERVAL_SECONDS: Final[int] = 60    # Check balance every 60s
 MARKET_DATA_POLL_INTERVAL_SECONDS: Final[int] = 5 # After order, quick check
 

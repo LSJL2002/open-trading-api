@@ -30,6 +30,7 @@ class MarketData:
         self.api_client = api_client
         self.last_price: Optional[int] = None
         self.last_price_time: Optional[datetime] = None
+        self.price_history: list = []  # Track recent prices for momentum detection
     
     def get_current_price(self, stock_code: str = config.STOCK_CODE) -> Optional[int]:
         """
@@ -91,6 +92,9 @@ class MarketData:
             self.last_price = price
             self.last_price_time = datetime.now()
             
+            # Add to price history for momentum detection
+            self._update_price_history(price)
+            
             logger.info(f"💹 Real-time price fetched: {price:,} KRW ✓")
             return price
         
@@ -121,3 +125,76 @@ class MarketData:
             logger.debug(f"Using cached price: {self.last_price:,} KRW (age: {age_seconds:.0f}s)")
             return self.last_price
         return None
+    
+    def _update_price_history(self, price: int) -> None:
+        """
+        Update price history for momentum detection.
+        
+        Args:
+            price: Current price to add to history
+        """
+        self.price_history.append(price)
+        
+        # Keep only recent prices (limit history to MOMENTUM_WINDOW)
+        if len(self.price_history) > config.MOMENTUM_WINDOW:
+            self.price_history.pop(0)
+    
+    def get_price_momentum(self) -> dict:
+        """
+        Analyze price momentum based on recent price history.
+        
+        Returns:
+            Dictionary with momentum analysis:
+            {
+                'momentum': 'uptrend' | 'downtrend' | 'neutral',
+                'current_price': int,
+                'min_price': int,
+                'max_price': int,
+                'price_change_percent': float,
+                'history_length': int
+            }
+        """
+        if not self.price_history or len(self.price_history) < 2:
+            return {
+                'momentum': 'neutral',
+                'current_price': self.last_price or 0,
+                'min_price': self.last_price or 0,
+                'max_price': self.last_price or 0,
+                'price_change_percent': 0.0,
+                'history_length': len(self.price_history)
+            }
+        
+        current_price = self.price_history[-1]
+        previous_price = self.price_history[0]
+        min_price = min(self.price_history)
+        max_price = max(self.price_history)
+        
+        # Calculate percentage change from oldest to newest price
+        if previous_price > 0:
+            price_change_percent = ((current_price - previous_price) / previous_price) * 100
+        else:
+            price_change_percent = 0.0
+        
+        # Detect momentum
+        if price_change_percent > config.MOMENTUM_THRESHOLD_PERCENT:
+            momentum = 'uptrend'
+        elif price_change_percent < -config.MOMENTUM_THRESHOLD_PERCENT:
+            momentum = 'downtrend'
+        else:
+            momentum = 'neutral'
+        
+        logger.debug(
+            f"📊 Momentum analysis: {momentum} | "
+            f"Current: {current_price:,} | "
+            f"Change: {price_change_percent:+.2f}% | "
+            f"Range: {min_price:,} - {max_price:,}"
+        )
+        
+        return {
+            'momentum': momentum,
+            'current_price': current_price,
+            'min_price': min_price,
+            'max_price': max_price,
+            'price_change_percent': price_change_percent,
+            'history_length': len(self.price_history)
+        }
