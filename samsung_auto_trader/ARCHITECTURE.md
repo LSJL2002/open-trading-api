@@ -147,7 +147,7 @@ logger.debug("Debug info")
 **Key Class: TokenManager**
 
 **Flow:**
-   ```python
+   ```json
   │   ├── Try GH_APPKEY / GH_APPSECRET (primary)
   │   ├── Try GITHUB_APPKEY / GITHUB_APPSECRET
   │   ├── Try KIS_APPKEY / KIS_APPSECRET
