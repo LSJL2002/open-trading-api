@@ -22,7 +22,7 @@ The Samsung Auto Trader is built on a modular, layered architecture:
    │  (Token    │ │(Constants & │ │  (Logging)   │
    │Management) │ │ Config)     │ │              │
    └────────────┘ └─────────────┘ └──────────────┘
-        │                                │
+        │                |                 │
         └────────┬─────────────────────────┘
                  │
                  ▼
@@ -33,9 +33,9 @@ The Samsung Auto Trader is built on a modular, layered architecture:
    │  - Manages trading loop            │
    └────────┬───────────────────────────┘
             │
-      ┌─────┼────────┬──────────────┐
-      │     │        │              │
-      ▼     ▼        ▼              ▼
+      ┌──────────────┬──────────────┐
+      │              │              │
+      ▼              ▼              ▼
 ┌──────────────┐ ┌────────────┐ ┌────────────┐
 │market_data.py│ │ account.py │ │ orders.py  │
 │ (Price Data) │ │(Balances & │ │(Order Mgmt)│
@@ -79,15 +79,16 @@ main()
   ├── Parse arguments (--test-duration)
   ├── Load GH_ACCOUNT env var
   ├── Parse account number (8 digits + 2 product code)
-  ├── Create TokenManager (auth.py)
-  ├── Get token
-  ├── Create APIClient
-  ├── Create Trader
-  ├── Call trader.run()
+   ├── Create TokenManager (auth.py)
+   ├── TokenManager.authenticate(base_url) → acquire/cache token
+   ├── Create APIClient
+   ├── Create Trader
+   ├── Call trader.run_trading_loop(duration_minutes=...)
   └── Handle errors and exit codes
 ```
 
 **Entry Point for Users:**
+- cd samsung_auto_trader
 - Users run: `python main.py [--test-duration N]`
 
 ---
@@ -142,17 +143,10 @@ logger.debug("Debug info")
 ### 4. **auth.py** - Authentication & Token Management
 
 **Responsibilities:**
-- Load credentials from environment variables
-- Authenticate with Korea Investment API
-- Cache tokens for same-day reuse
-- Validate and refresh tokens
 
 **Key Class: TokenManager**
 
 **Flow:**
-```
-TokenManager()
-  ├── load_credentials()
   │   ├── Try GH_APPKEY / GH_APPSECRET (primary)
   │   ├── Try GITHUB_APPKEY / GITHUB_APPSECRET
   │   ├── Try KIS_APPKEY / KIS_APPSECRET
@@ -163,6 +157,15 @@ TokenManager()
   │   ├── If cached and valid, return cached token
   │   ├── Otherwise, call API to get new token
   │   ├── Save to cache with expiry time
+Cache File: token_cache.json
+```json
+{
+   "token": "eyJ...",
+   "expiry": "2026-05-31T16:00:00",
+   "saved_at": "2026-05-31T10:30:00",
+   "appkey": "..."
+}
+```
   │   └── Return token
   │
   └── is_token_valid()
@@ -303,6 +306,7 @@ MarketData(api_client)
 - Query account balance and available cash
 - Fetch current stock holdings
 - Track account state across trading loop
+- Manage pending sell orders (for delayed sell execution at target price)
 - Format account data for display
 
 **Key Classes:**
@@ -377,6 +381,17 @@ Account(api_client, account_number, account_product_code)
 **has_stock(stock_code) → bool**
 - Check if account holds specific stock
 - Uses cached holdings
+
+**get_pending_sell_order() → Optional[dict]**
+- Check if there's a pending sell order waiting for target price
+- Returns dict with keys: target_sell_price, buy_price, quantity
+- Returns None if no pending sell
+
+**execute_pending_sell_order(current_price) → Optional[dict]**
+- Execute the pending sell order at the given current price
+- Updates account state and calculates profit/loss
+- Returns dict with execution result and profit amount
+- Returns None if execution failed
 
 **API Response for Balance:**
 ```json
@@ -528,58 +543,59 @@ Main trading loop:
 
 **execute_trading_cycle() → bool**
 ```
-One complete buy-sell cycle:
+One trading cycle with PENDING SELL pattern:
 
 1. Fetch current price
    ├── Call market.get_current_price()
    ├── Log price
    └── Return False if failed
 
-2. Analyze market momentum
-   ├── Get price range from history
-   ├── Detect trend (uptrend, downtrend, neutral)
-   └── Calculate buy/sell prices:
-       - Buy price = min_recent_price - ORDER_BUFFER_KRW
-       - Sell price = max_recent_price + ORDER_BUFFER_KRW
+2. CHECK FOR PENDING SELL FROM PREVIOUS CYCLE
+   ├── Call account.get_pending_sell_order()
+   ├── If pending sell exists:
+   │   ├── Check if current_price >= target_sell_price
+   │   ├── If YES → Execute pending sell:
+   │   │   ├── Call account.execute_pending_sell_order(current_price)
+   │   │   ├── Calculate profit/loss
+   │   │   └── Log execution and P&L
+   │   ├── If NO → Wait for next cycle:
+   │   │   ├── Log "Waiting for price to rise X KRW"
+   │   │   └── Return True (continue to next cycle)
+   └── If no pending sell → Continue to step 3
 
-3. Check account balance
-   ├── Call account.get_balance()
-   ├── Verify sufficient cash
-   └── Return False if insufficient
+3. ANALYZE MOMENTUM FOR NEW BUY-SELL CYCLE
+   ├── Call market.get_price_momentum()
+   ├── Check if momentum is strong enough (should_place_orders())
+   ├── If weak momentum → Skip this cycle, return True
+   └── If strong momentum → Continue to step 4
 
-4. Place buy order
+4. PLACE BUY ORDER
+   ├── Calculate prices from momentum:
+   │   - Buy price = min_recent_price - ORDER_BUFFER_KRW
+   │   - Sell target = max_recent_price + ORDER_BUFFER_KRW
+   ├── Check account balance for sufficient cash
    ├── Call orders.place_buy_order()
-   ├── Wait for confirmation
-   └── Verify execution status
+   └── Return False if failed
 
-5. Wait for order execution
-   ├── Poll order status every MARKET_DATA_POLL_INTERVAL_SECONDS
-   ├── Timeout after max attempts
-   └── Verify holdings increased
+5. WAIT FOR BUY EXECUTION
+   ├── Sleep MARKET_DATA_POLL_INTERVAL_SECONDS
+   ├── Verify holdings increased
+   └── Confirm execution
 
-6. Update market data
-   ├── Fetch latest price
-   └── Update price history
+6. PLACE SELL ORDER AS PENDING
+   ├── Call orders.place_sell_order() at target price
+   ├── Save pending sell info to account:
+   │   - target_sell_price = sell_target_price
+   │   - buy_price = buy_price
+   │   - quantity = 1 (ORDER_QUANTITY)
+   ├── Log "Sell order as PENDING: waiting for price X"
+   └── Return True (will wait for price in next cycle)
 
-7. Place sell order
-   ├── Call orders.place_sell_order()
-   ├── Use updated price information
-   └── Wait for confirmation
-
-8. Wait for order execution
-   ├── Poll order status
-   ├── Timeout after max attempts
-   └── Verify holdings decreased
-
-9. Calculate P&L
-   ├── Buy price vs. sell price
-   ├── Transaction cost impact
-   └── Log profit/loss
-
-10. Return True if cycle completed successfully
+7. Return True (cycle complete, stock held and waiting for sell target)
 ```
 
-**is_within_trading_window() → bool**
+**is_trading_window_open() → bool**
+
 ```
 Check if current time is within trading hours:
 1. Get current time (local Korean time)
@@ -588,11 +604,36 @@ Check if current time is within trading hours:
 4. Return True if between them, False otherwise
 ```
 
+**get_order_prices_from_momentum() → Tuple[int, int, str]**
+
+```
+Calculate buy and sell order prices based on momentum analysis:
+1. Call market.get_price_momentum()
+2. Extract min_price, max_price, momentum signal
+3. Calculate:
+   - buy_price = min_price - ORDER_BUFFER_KRW
+   - sell_price = max_price + ORDER_BUFFER_KRW
+4. Log momentum-based orders
+5. Return (buy_price, sell_price, momentum_signal)
+```
+
+**should_place_orders() → bool**
+
+```
+Decide whether to place new orders based on momentum strength:
+1. Get price history via market.get_price_momentum()
+2. Check price history length (must be >= 3)
+3. Get momentum signal (uptrend/downtrend/neutral)
+4. If history too short → Log "Insufficient price history", return False
+5. If momentum is neutral → Log "No clear momentum", return False
+6. If clear momentum (uptrend or downtrend) → return True
+```
+
 ---
 
 ## 🔄 Complete Request-Response Flow
 
-### Example: Full Trading Cycle (Buy & Sell)
+### Example: Multi-Cycle Trading with Pending Sell Pattern
 
 ```
 START: main.py
@@ -602,11 +643,11 @@ START: main.py
   │
   ├─→ Create TokenManager
   │    └─→ load_credentials()
-  │    └─→ get_token()
+  │    └─→ authenticate(base_url)
   │         ├─→ Check cache (token_cache.json)
   │         └─→ If expired/missing, call auth API:
   │              POST /oauth2/tokenP
-  │              Returns: access_token, expires_at
+   │              Returns: access_token (may include expiry field `access_token_token_expired`)
   │              Saves to token_cache.json
   │
   ├─→ Create APIClient(token, app_key, app_secret)
@@ -617,7 +658,7 @@ START: main.py
        ├─→ Create Account(api_client, account_number, product_code)
        └─→ Create OrderManager(api_client, account_number, product_code, account)
             │
-            └─→ trader.run()
+            └─→ trader.run_trading_loop(duration_minutes=...)
                  │
                  ├─→ Check time is between 09:10 - 15:30
                  │

@@ -111,12 +111,17 @@ Key Methods:
 - `get_current_price()`: Fetch current price for stock code
 - `get_price_range()`: Calculate min/max from recent prices
 - `detect_momentum()`: Analyze price trends for trading signals
+Key Methods:
+- `get_current_price()`: Fetch current price for stock code
+- `get_cached_price()`: Return last fetched price without making a new API call
+- `get_price_momentum()`: Analyze price trends for trading signals and return structured momentum information
 
 ### **account.py** - Account Management
 Responsibilities:
 - Query account balance and available cash
 - Fetch current stock holdings
 - Track account state across trading loop
+- Manage pending sell orders (for delayed sell execution at target price)
 - Format account data for display and decision-making
 
 Key Classes:
@@ -128,6 +133,8 @@ Key Methods:
 - `get_balance()`: Fetch account balance and cash available
 - `get_holdings()`: Fetch current stock holdings
 - `has_stock()`: Check if specific stock is held
+- `get_pending_sell_order()`: Check if there's a pending sell order waiting for target price
+- `execute_pending_sell_order(price)`: Execute the pending sell at the given price
 
 ### **orders.py** - Order Placement and Tracking
 Responsibilities:
@@ -157,24 +164,30 @@ Key Classes:
 - `Trader`: Main trading logic and coordination
 
 Key Methods:
-- `run()`: Execute trading loop until market close
+- `run_trading_loop()`: Execute trading loop until market close (or for a test duration)
 - `execute_trading_cycle()`: Perform one complete buy-sell cycle
-- `is_within_trading_window()`: Check if current time is during market hours
+- `is_trading_window_open()`: Check if current time is during market hours
 
 ---
 
 ## 🔄 Trading Logic
 
-The system operates in cycles during trading hours (09:10 - 15:30):
+The system operates in cycles during trading hours (09:10 - 15:30) using a **pending sell order** pattern:
 
-1. **Check Current Price**: Fetch real-time Samsung stock price via API
-2. **Analyze Holdings**: Check account balance and current positions
-3. **Place Buy Order**: Order at (lowest recent price - 500 KRW)
-4. **Wait & Verify**: Poll order status until execution confirmed
-5. **Place Sell Order**: Order at (highest recent price + 500 KRW)
-6. **Wait & Verify**: Poll order status until execution confirmed
+**Each cycle:**
+1. **Check Current Price**: Fetch real-time Samsung stock price
+2. **Check Pending Sell**: Is there a pending sell order from a previous cycle?
+   - **If yes and price >= target**: Execute the sell immediately
+   - **If yes but price < target**: Wait for next cycle (keep holding)
+   - **If no**: Continue to step 3
+3. **Check Momentum**: Decide if conditions are good for a new buy-sell cycle
+4. **Place Buy Order**: Order at (lowest recent price - 500 KRW)
+5. **Wait & Verify**: Poll for execution confirmation
+6. **Place Sell Order (Pending)**: Set target at (highest recent price + 500 KRW), but don't execute yet
 7. **Rest**: Wait before next cycle (respect rate limits)
-8. **Repeat**: Continue until market close (15:30)
+8. **Repeat**: Return to step 1
+
+**Key behavior**: Once you buy, the system **waits for the price to reach the target** before selling. This maximizes profit potential while minimizing order rejections.
 
 ---
 
@@ -214,6 +227,8 @@ MOMENTUM_WINDOW = 5                      # Track last 5 prices
 MOMENTUM_THRESHOLD_PERCENT = 0.3         # 0.3% threshold for trend
 ```
 
+Note: Some legacy docs reference `ORDER_PRICE_OFFSET_BUY` / `ORDER_PRICE_OFFSET_SELL` (e.g., QUICKSTART.md). The primary runtime pricing uses `ORDER_BUFFER_KRW` and momentum-based calculations. If you encounter `ORDER_PRICE_OFFSET_*` elsewhere, check `QUICKSTART.md` or `IMPLEMENTATION.md` for historical examples.
+
 ### Trading Window
 
 ```python
@@ -241,33 +256,52 @@ LOG_LEVEL = "INFO"   # Can be DEBUG, INFO, WARNING, ERROR
 
 ### Understanding the Logs
 
-Each trading cycle shows:
-
+Example cycle 1 (Buy + Pending Sell):
 ```
 ======================================================================
-🔄 Starting trading cycle...
+🔄 Cycle #1: Starting trading cycle...
 ======================================================================
 💹 Current price: 70,000 KRW
 📦 Holdings before order: 0 shares
-💰 Balance: 5,000,000 KRW available
-📍 Price offsets: Buy 69,500 (current 70,000 - 500), Sell 70,500...
+📍 Momentum-based orders: Buy 69,500 (low 69,500-500), Sell 70,500 (high 70,500+500)
 ----------------------------------------------------------------------
-📤 Placing BUY order: 1 shares of 005930 @ 69,500 KRW...
-✅ API Response: 200 - POST /uapi/domestic-stock/v1/trading/order-cash
-📤 Buy Order: Order ID: 12345, Status: 접수됨
-⏳ Waiting for buy order execution...
+📤 Placing BUY order: 1 shares @ 69,500 KRW...
+⏳ Waiting for execution...
 📦 Holdings after buy: 1 shares
-✅ Buy order EXECUTED (+1 shares)
+✅ Buy order EXECUTED
 ----------------------------------------------------------------------
-📤 Placing SELL order: 1 shares of 005930 @ 70,500 KRW...
-✅ API Response: 200 - POST /uapi/domestic-stock/v1/trading/order-cash
-📤 Sell Order: Order ID: 12346, Status: 접수됨
-⏳ Waiting for sell order execution...
-📦 Holdings after sell: 0 shares
-✅ Sell order EXECUTED (-1 shares)
-💵 Final balance: 5,000,100 KRW available
+📉 Placing SELL order as PENDING: 70,500 KRW
+   (Will wait for price to reach 70,500 before actually selling)
+⏳ Stock held at 1 shares, waiting for price to reach 70,500...
 ======================================================================
-✅ Trading cycle completed
+```
+
+Example cycle 2 (Pending Sell Waiting):
+```
+======================================================================
+🔄 Cycle #2: Starting trading cycle...
+======================================================================
+💹 Current price: 69,800 KRW
+📋 Pending sell order waiting: 1 shares @ 70,500
+   Current price: 69,800 KRW
+   Target price: 70,500 KRW (bought @ 69,500)
+⏳ Waiting for price to rise 700 KRW (+1.00%)
+======================================================================
+```
+
+Example cycle 3 (Pending Sell Executed):
+```
+======================================================================
+🔄 Cycle #3: Starting trading cycle...
+======================================================================
+💹 Current price: 70,600 KRW
+📋 Pending sell order waiting: 1 shares @ 70,500
+   Current price: 70,600 KRW
+   Target price: 70,500 KRW
+✅ Price reached target! Executing pending sell at 70,600
+💰 SOLD at 70,600 KRW
+💰 Trade profit: 1,100 KRW (bought @ 69,500, sold @ 70,600)
+📈 Total profit: 1,100 KRW (1 trades)
 ======================================================================
 ```
 
@@ -275,12 +309,12 @@ Each trading cycle shows:
 
 First run: Gets new token from API, saves to `token_cache.json`
 ```
-🔐 Token Issued: Token valid until 2026-05-31 16:00:00
+🔐 Token Issued: Token valid until (see `token_cache.json` `expiry`)
 ```
 
 Subsequent runs same day: Reuses cached token
 ```
-🔐 Token Reused: Valid today (expires 2026-05-31 16:00:00)
+🔐 Token Reused: Valid today (see `token_cache.json` `expiry`)
 ```
 
 ## 📈 Performance Tips
@@ -312,7 +346,7 @@ To minimize API calls:
 ✅ **What's safe**:
 - Credentials loaded from environment variables (not hardcoded)
 - Token cached locally in simple JSON (not encrypted)
-- SSL verification disabled only for VTS (mock) endpoint
+- APIClient currently disables SSL verification (`verify=False`) for requests (convenience for mock). Enable verification in production.
 - No credentials logged
 
 ⚠️ **For production**:
