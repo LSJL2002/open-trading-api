@@ -147,6 +147,7 @@ logger.debug("Debug info")
 **Key Class: TokenManager**
 
 **Flow:**
+   '''python
   │   ├── Try GH_APPKEY / GH_APPSECRET (primary)
   │   ├── Try GITHUB_APPKEY / GITHUB_APPSECRET
   │   ├── Try KIS_APPKEY / KIS_APPSECRET
@@ -158,6 +159,7 @@ logger.debug("Debug info")
   │   ├── Otherwise, call API to get new token
   │   ├── Save to cache with expiry time
 Cache File: token_cache.json
+'''
 ```json
 {
    "token": "eyJ...",
